@@ -46,19 +46,12 @@ import {
 } from 'lucide-react';
 
 // Firebase Configuration & Initialization
-const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
-};
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 const storage = getStorage(app);
-const appId = 'smart-soleh-app';
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-soleh-app';
 
 const DEFAULT_CATEGORIES = [
   'Tentatif',
@@ -131,7 +124,11 @@ export default function App() {
   useEffect(() => {
     const initAuth = async () => {
       try {
-        await signInAnonymously(auth);
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
       } catch (error) {
         console.error("Auth init error:", error);
       }
@@ -803,11 +800,46 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
     });
   };
 
-  const uploadFileAndGetUrl = async (file) => {
-    if (!file) return null;
-    const fileRef = ref(storage, `${appId}/topics/${Date.now()}_${file.name}`);
-    await uploadBytes(fileRef, file);
-    return await getDownloadURL(fileRef);
+  // Helper function to resize and convert image to Base64 to bypass Firebase Storage setup issues
+  const processImageToBase64 = (file) => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = (event) => {
+        const img = new Image();
+        img.src = event.target.result;
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const MAX_WIDTH = 800; // Resize to max 800px width/height to save space
+          const MAX_HEIGHT = 800;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_WIDTH) {
+              height *= MAX_WIDTH / width;
+              width = MAX_WIDTH;
+            }
+          } else {
+            if (height > MAX_HEIGHT) {
+              width *= MAX_HEIGHT / height;
+              height = MAX_HEIGHT;
+            }
+          }
+
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, width, height);
+          
+          // Compress to JPEG format with 0.7 quality to fit well within Firestore limits
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+          resolve(dataUrl);
+        };
+        img.onerror = (error) => reject(error);
+      };
+      reader.onerror = (error) => reject(error);
+    });
   };
 
   const handleAddTopic = async (e) => {
@@ -830,19 +862,19 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
     setUploading(true);
 
     try {
-      // Upload all question images sequentially or in parallel
+      // Process and compress images to Base64 to save directly to Firestore
       const questionContentUrls = await Promise.all(
-          newTopic.questionFiles.map(q => uploadFileAndGetUrl(q.file))
+          newTopic.questionFiles.map(q => processImageToBase64(q.file))
       );
       
-      const answerContent = await uploadFileAndGetUrl(newTopic.answerFile);
+      const answerContent = await processImageToBase64(newTopic.answerFile);
 
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'topics'), {
         title: newTopic.title,
         category: activeCategory,
-        question: questionContentUrls, // Now an array of URLs
+        question: questionContentUrls, // Now an array of Base64 strings
         questionType: newTopic.questionType,
-        answerScheme: answerContent,
+        answerScheme: answerContent, // Base64 string
         answerType: newTopic.answerType,
         createdAt: Date.now()
       });
@@ -858,13 +890,15 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
         answerPreview: null
       });
       // Reset file inputs manually
-      document.getElementById('questionFileInput').value = '';
-      document.getElementById('answerFileInput').value = '';
+      const qInput = document.getElementById('questionFileInput');
+      if (qInput) qInput.value = '';
+      const aInput = document.getElementById('answerFileInput');
+      if (aInput) aInput.value = '';
       
       setIsAdding(false);
     } catch (error) {
       console.error("Error adding topic:", error);
-      alert("Failed to upload topic. Please check your connection or permissions.");
+      alert(`Failed to save topic: ${error.message}`);
     } finally {
       setUploading(false);
     }
