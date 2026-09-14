@@ -222,14 +222,26 @@ export default function App() {
       setRole('facilitator');
     } catch (error) {
       console.error("Google sign in failed:", error);
-      // Fallback for preview environment where OAuth domains might not be configured
-      alert("Google Login is restricted in this sandbox. Entering Demo Facilitator Mode.");
+      // Graceful fallback for preview/sandbox environment where OAuth domains aren't configured.
+      // Enter a demo facilitator mode without blocking alerts and create a lightweight demo user.
+      console.warn('Falling back to demo facilitator mode (non-Firebase).');
+      setUser({ uid: 'demo-facilitator', displayName: 'Demo Facilitator', isAnonymous: false });
       setRole('facilitator');
     }
   };
 
   const handleLogout = async () => {
     try {
+      // If using a demo facilitator (no Firebase auth), just clear local state.
+      if (!auth || (user && String(user.uid).startsWith('demo-'))) {
+        setRole(null);
+        setUser(null);
+        if (auth) {
+          try { await signInAnonymously(auth); } catch (e) { console.warn('Anonymous re-auth failed:', e); }
+        }
+        return;
+      }
+
       await signOut(auth);
       setRole(null);
       // Re-auth anonymously to continue as student
@@ -763,7 +775,30 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
     setNewTopic(prev => ({ ...prev, questionFiles: copyListItems }));
   };
 
-  const categoryTopics = topics.filter(t => t.category === activeCategory);
+  const loadLocalTopics = () => {
+    try {
+      const localKey = 'smart_soleh_demo_topics';
+      const raw = localStorage.getItem(localKey);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed;
+    } catch (e) {
+      console.warn('Failed to load local demo topics', e);
+      return [];
+    }
+  };
+
+  // Merge remote `topics` with local demo topics (avoid duplicates by id)
+  const mergedTopics = (() => {
+    const local = loadLocalTopics();
+    const map = new Map();
+    topics.forEach(t => { if (t && t.id) map.set(t.id, t); });
+    local.forEach(t => { if (t && t.id && !map.has(t.id)) map.set(t.id, t); });
+    return Array.from(map.values());
+  })();
+
+  const categoryTopics = mergedTopics.filter(t => t.category === activeCategory);
 
   const determineFileType = (file) => {
     if (file.type.startsWith('image/')) return 'image';
@@ -898,15 +933,39 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
       
       const answerContent = await processImageToBase64(newTopic.answerFile);
 
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'topics'), {
-        title: newTopic.title,
-        category: activeCategory,
-        question: questionContentUrls, // Now an array of Base64 strings
-        questionType: newTopic.questionType,
-        answerScheme: answerContent, // Base64 string
-        answerType: newTopic.answerType,
-        createdAt: Date.now()
-      });
+      if (!db) {
+        // Firestore not available: save topic to localStorage for demo mode
+        const localKey = 'smart_soleh_demo_topics';
+        const id = Date.now().toString() + '_' + Math.random().toString(36).substring(2,9);
+        const demoTopic = {
+          id,
+          title: newTopic.title,
+          category: activeCategory,
+          question: questionContentUrls,
+          questionType: newTopic.questionType,
+          answerScheme: answerContent,
+          answerType: newTopic.answerType,
+          createdAt: Date.now()
+        };
+        try {
+          const existing = JSON.parse(localStorage.getItem(localKey) || '[]');
+          existing.push(demoTopic);
+          localStorage.setItem(localKey, JSON.stringify(existing));
+        } catch (err) {
+          console.error('Failed to save demo topic to localStorage', err);
+          throw err;
+        }
+      } else {
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'topics'), {
+          title: newTopic.title,
+          category: activeCategory,
+          question: questionContentUrls, // Now an array of Base64 strings
+          questionType: newTopic.questionType,
+          answerScheme: answerContent, // Base64 string
+          answerType: newTopic.answerType,
+          createdAt: Date.now()
+        });
+      }
       
       // Clean up object URLs
       newTopic.questionFiles.forEach(q => URL.revokeObjectURL(q.preview));
