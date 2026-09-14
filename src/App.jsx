@@ -47,10 +47,23 @@ import {
 
 // Firebase Configuration & Initialization
 const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-const storage = getStorage(app);
+let app;
+let auth;
+let db;
+let storage;
+try {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+  storage = getStorage(app);
+} catch (e) {
+  // If Firebase fails to initialize (e.g., missing config), surface but allow app to mount
+  console.error('Firebase initialization failed:', e);
+  app = null;
+  auth = null;
+  db = null;
+  storage = null;
+}
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'smart-soleh-app';
 
 const DEFAULT_CATEGORIES = [
@@ -124,6 +137,11 @@ export default function App() {
   useEffect(() => {
     const initAuth = async () => {
       try {
+        if (!auth) {
+          console.warn('Skipping auth setup because Firebase auth is not available');
+          return;
+        }
+
         if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
           await signInWithCustomToken(auth, __initial_auth_token);
         } else {
@@ -135,10 +153,16 @@ export default function App() {
     };
     initAuth();
 
+    if (!auth) {
+      // No auth: continue without Firebase and show the UI
+      setUser(null);
+      setLoading(false);
+      return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
       setLoading(false);
-      // If user is anonymous, they are just a visitor. If they have a Google account linked or we mock it, they are facilitator.
       if (currentUser && !currentUser.isAnonymous) {
         setRole('facilitator');
       }
@@ -149,6 +173,11 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+
+    if (!db) {
+      console.warn('Firestore not available; skipping data listeners');
+      return;
+    }
 
     const publicRef = (collectionName) => collection(db, 'artifacts', appId, 'public', 'data', collectionName);
 
