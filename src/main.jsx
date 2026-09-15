@@ -4,6 +4,31 @@ import './index.css'
 import App from './App.jsx'
 import ErrorBoundary from './ErrorBoundary.jsx'
 
+// Initialize Firebase configuration from environment variables
+// This must happen before the app initializes
+if (typeof window !== 'undefined') {
+  window.__firebase_config = {
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID
+  };
+  
+  // Log Firebase config status for debugging
+  const config = window.__firebase_config;
+  const hasValidConfig = config.projectId && config.apiKey && config.authDomain;
+  console.log('[Firebase] Configuration status:', hasValidConfig ? '✓ Loaded' : '✗ Missing (check env vars)');
+  if (!hasValidConfig) {
+    console.warn('[Firebase] Missing environment variables:', {
+      hasProjectId: !!config.projectId,
+      hasApiKey: !!config.apiKey,
+      hasAuthDomain: !!config.authDomain
+    });
+  }
+}
+
 // Simple global error overlay for non-React errors
 function installGlobalErrorOverlay() {
   if (typeof window === 'undefined') return;

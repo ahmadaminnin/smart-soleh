@@ -46,19 +46,47 @@ import {
 } from 'lucide-react';
 
 // Firebase Configuration & Initialization
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+let firebaseConfig = {};
+
+// Try to get Firebase config from window object
+if (typeof window !== 'undefined' && window.__firebase_config) {
+  const config = window.__firebase_config;
+  
+  // Validate that config has real values (not placeholders)
+  const isValidConfig = config && 
+                        config.projectId && 
+                        !config.projectId.includes('%%') &&
+                        config.apiKey &&
+                        !config.apiKey.includes('%%') &&
+                        config.authDomain &&
+                        !config.authDomain.includes('%%');
+  
+  if (isValidConfig) {
+    firebaseConfig = config;
+    console.log('[Firebase] Configuration loaded successfully');
+  } else {
+    console.warn('[Firebase] Configuration found but contains placeholder values. Facilitator mode will not be available.');
+  }
+} else {
+  console.warn('[Firebase] No configuration found in window.__firebase_config');
+}
+
 let app;
 let auth;
 let db;
 let storage;
 try {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
-  storage = getStorage(app);
+  if (Object.keys(firebaseConfig).length > 0) {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+    storage = getStorage(app);
+    console.log('[Firebase] Successfully initialized');
+  } else {
+    throw new Error('Firebase config is empty or invalid');
+  }
 } catch (e) {
-  // If Firebase fails to initialize (e.g., missing config), surface but allow app to mount
-  console.error('Firebase initialization failed:', e);
+  console.error('[Firebase] Initialization failed:', e.message);
   app = null;
   auth = null;
   db = null;
@@ -219,8 +247,11 @@ export default function App() {
     try {
       // Require Firebase to be configured for facilitator access
       if (!auth) {
-        alert('Facilitator mode requires Firebase to be configured. Please contact the administrator.');
-        console.error('Firebase auth not available. Cannot enter facilitator mode.');
+        const message = 'Facilitator mode requires Firebase authentication to be properly configured. ' +
+                       'Please ensure all required environment variables are set (VITE_FIREBASE_API_KEY, ' +
+                       'VITE_FIREBASE_PROJECT_ID, etc.). Check browser console for more details.';
+        console.error('[Google Sign-In]', message);
+        alert(message);
         return;
       }
 
@@ -228,14 +259,16 @@ export default function App() {
       await signInWithPopup(auth, provider);
       setRole('facilitator');
     } catch (error) {
-      console.error("Google sign in failed:", error);
+      console.error("[Google Sign-In] Failed:", error);
       // Show specific error messages
       if (error.code === 'auth/popup-blocked') {
         alert('Sign-in popup was blocked. Please check your popup blocker settings and try again.');
       } else if (error.code === 'auth/operation-not-supported-in-this-environment') {
-        alert('Google Sign-In is not supported in this environment. Please ensure you are accessing via HTTPS.');
+        alert('Google Sign-In is not supported in this environment. Please ensure you are accessing via HTTPS and the app is properly configured.');
+      } else if (error.code === 'auth/unauthorized-domain') {
+        alert('This domain is not authorized for Google Sign-In. Please check Firebase console configuration.');
       } else {
-        alert('Google Sign-In failed. Please try again or contact support.');
+        alert(`Google Sign-In failed: ${error.message}. Check browser console for details.`);
       }
     }
   };
