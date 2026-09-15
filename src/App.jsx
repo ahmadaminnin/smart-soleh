@@ -77,19 +77,6 @@ const DEFAULT_CATEGORIES = [
   'Magic box'
 ];
 
-const loadLocalTopics = () => {
-  try {
-    const raw = localStorage.getItem('smart_soleh_demo_topics');
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
-    return parsed;
-  } catch (e) {
-    console.warn('Failed to load local demo topics', e);
-    return [];
-  }
-};
-
 // Reusable Watermark Component
 const Watermark = () => (
   <div className="fixed bottom-0 left-0 w-full p-2 bg-red-600/90 text-white text-center text-xs md:text-sm font-bold tracking-wider z-50 pointer-events-none shadow-lg">
@@ -186,9 +173,9 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return;
+
     if (!db) {
-      console.warn('Firestore not available; loading local demo topics');
-      setTopics(loadLocalTopics());
+      console.error('Firestore not available; cannot fetch data');
       return;
     }
 
@@ -205,17 +192,7 @@ export default function App() {
     const unsubTopics = onSnapshot(publicRef('topics'), (snapshot) => {
       const tops = [];
       snapshot.forEach(doc => tops.push({ id: doc.id, ...doc.data() }));
-      // Merge with any local demo topics
-      try {
-        const local = loadLocalTopics();
-        const map = new Map();
-        tops.forEach(t => { if (t && t.id) map.set(t.id, t); });
-        local.forEach(t => { if (t && t.id && !map.has(t.id)) map.set(t.id, t); });
-        setTopics(Array.from(map.values()));
-      } catch (e) {
-        console.warn('Failed to merge local topics', e);
-        setTopics(tops);
-      }
+      setTopics(tops);
     }, console.error);
 
     // Listen to Custom Settings (Categories)
@@ -238,34 +215,12 @@ export default function App() {
     };
   }, [user]);
 
-  // Listen for local demo topic updates (emitted by DatabaseManager when saving locally)
-  useEffect(() => {
-    const handler = () => {
-      // If we have remote topics, merge, otherwise just load local
-      setTopics(prev => {
-        try {
-          const local = loadLocalTopics();
-          const map = new Map();
-          if (Array.isArray(prev)) prev.forEach(t => { if (t && t.id) map.set(t.id, t); });
-          local.forEach(t => { if (t && t.id && !map.has(t.id)) map.set(t.id, t); });
-          return Array.from(map.values());
-        } catch (e) {
-          return loadLocalTopics();
-        }
-      });
-    };
-
-    window.addEventListener('smart-soleh-local-topics-updated', handler);
-    return () => window.removeEventListener('smart-soleh-local-topics-updated', handler);
-  }, []);
-
   const handleGoogleLogin = async () => {
     try {
-      // Check if Firebase is initialized
+      // Require Firebase to be configured for facilitator access
       if (!auth) {
-        console.warn('Firebase auth not available. Entering demo facilitator mode.');
-        setUser({ uid: 'demo-facilitator', displayName: 'Demo Facilitator', isAnonymous: false });
-        setRole('facilitator');
+        alert('Facilitator mode requires Firebase to be configured. Please contact the administrator.');
+        console.error('Firebase auth not available. Cannot enter facilitator mode.');
         return;
       }
 
@@ -274,30 +229,21 @@ export default function App() {
       setRole('facilitator');
     } catch (error) {
       console.error("Google sign in failed:", error);
-      // Check error type
+      // Show specific error messages
       if (error.code === 'auth/popup-blocked') {
-        console.error('Google sign-in popup was blocked. Check popup blocker settings.');
         alert('Sign-in popup was blocked. Please check your popup blocker settings and try again.');
       } else if (error.code === 'auth/operation-not-supported-in-this-environment') {
-        console.warn('Google sign-in not supported in this environment. Entering demo facilitator mode.');
+        alert('Google Sign-In is not supported in this environment. Please ensure you are accessing via HTTPS.');
       } else {
-        console.warn('Google sign-in failed. Falling back to demo facilitator mode.');
+        alert('Google Sign-In failed. Please try again or contact support.');
       }
-      // Graceful fallback for preview/sandbox environment where OAuth domains aren't configured.
-      setUser({ uid: 'demo-facilitator', displayName: 'Demo Facilitator', isAnonymous: false });
-      setRole('facilitator');
     }
   };
 
   const handleLogout = async () => {
     try {
-      // If using a demo facilitator (no Firebase auth), just clear local state.
-      if (!auth || (user && String(user.uid).startsWith('demo-'))) {
-        setRole(null);
-        setUser(null);
-        if (auth) {
-          try { await signInAnonymously(auth); } catch (e) { console.warn('Anonymous re-auth failed:', e); }
-        }
+      if (!auth) {
+        console.error('Firebase auth not available for logout');
         return;
       }
 
@@ -326,11 +272,6 @@ export default function App() {
               {role === 'facilitator' ? (
                 <div className="flex items-center gap-4">
                   <span className="text-sm text-gray-600 hidden md:block">Facilitator Mode</span>
-                  {user && String(user.uid).startsWith('demo-') && (
-                    <div className="bg-orange-100 text-orange-800 text-xs font-bold px-2 py-1 rounded-full">
-                      DEMO MODE
-                    </div>
-                  )}
                   <Button variant="ghost" onClick={handleLogout}><LogOut className="w-4 h-4" /> Exit</Button>
                 </div>
               ) : (
@@ -839,30 +780,7 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
     setNewTopic(prev => ({ ...prev, questionFiles: copyListItems }));
   };
 
-  const loadLocalTopics = () => {
-    try {
-      const localKey = 'smart_soleh_demo_topics';
-      const raw = localStorage.getItem(localKey);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed;
-    } catch (e) {
-      console.warn('Failed to load local demo topics', e);
-      return [];
-    }
-  };
-
-  // Merge remote `topics` with local demo topics (avoid duplicates by id)
-  const mergedTopics = (() => {
-    const local = loadLocalTopics();
-    const map = new Map();
-    topics.forEach(t => { if (t && t.id) map.set(t.id, t); });
-    local.forEach(t => { if (t && t.id && !map.has(t.id)) map.set(t.id, t); });
-    return Array.from(map.values());
-  })();
-
-  const categoryTopics = mergedTopics.filter(t => t.category === activeCategory);
+  const categoryTopics = topics.filter(t => t.category === activeCategory);
 
   const determineFileType = (file) => {
     if (file.type.startsWith('image/')) return 'image';
@@ -998,40 +916,18 @@ const DatabaseManager = ({ categories, topics, onBack }) => {
       const answerContent = await processImageToBase64(newTopic.answerFile);
 
       if (!db) {
-        // Firestore not available: save topic to localStorage for demo mode
-        const localKey = 'smart_soleh_demo_topics';
-        const id = Date.now().toString() + '_' + Math.random().toString(36).substring(2,9);
-        const demoTopic = {
-          id,
-          title: newTopic.title,
-          category: activeCategory,
-          question: questionContentUrls,
-          questionType: newTopic.questionType,
-          answerScheme: answerContent,
-          answerType: newTopic.answerType,
-          createdAt: Date.now()
-        };
-        try {
-          const existing = JSON.parse(localStorage.getItem(localKey) || '[]');
-          existing.push(demoTopic);
-          localStorage.setItem(localKey, JSON.stringify(existing));
-          // Notify other parts of the app that local demo topics changed
-          try { window.dispatchEvent(new Event('smart-soleh-local-topics-updated')); } catch (e) { /* ignore */ }
-        } catch (err) {
-          console.error('Failed to save demo topic to localStorage', err);
-          throw err;
-        }
-      } else {
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'topics'), {
-          title: newTopic.title,
-          category: activeCategory,
-          question: questionContentUrls, // Now an array of Base64 strings
-          questionType: newTopic.questionType,
-          answerScheme: answerContent, // Base64 string
-          answerType: newTopic.answerType,
-          createdAt: Date.now()
-        });
+        throw new Error('Firestore is not configured. Cannot save topics. Please ensure Firebase is properly set up.');
       }
+
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'topics'), {
+        title: newTopic.title,
+        category: activeCategory,
+        question: questionContentUrls,
+        questionType: newTopic.questionType,
+        answerScheme: answerContent,
+        answerType: newTopic.answerType,
+        createdAt: Date.now()
+      });
       
       // Clean up object URLs
       newTopic.questionFiles.forEach(q => URL.revokeObjectURL(q.preview));
